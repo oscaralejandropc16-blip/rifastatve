@@ -158,6 +158,7 @@ def procesar_estadisticas(serie_numeros):
 def generar_sugerencias_4_digitos():
     """Analiza la frecuencia de la columna estricta de Super Gana (4 dígitos)."""
     try:
+        if not os.path.exists(CSV_FILE): return [], []
         df = pd.read_csv(CSV_FILE)
         if df.empty: return [], []
         
@@ -172,6 +173,7 @@ def generar_sugerencias_4_digitos():
 def generar_sugerencias_5_digitos():
     """Analiza la unión de Super Gana + Triple Gana (5 dígitos)."""
     try:
+        if not os.path.exists(CSV_FILE): return [], []
         df = pd.read_csv(CSV_FILE)
         if df.empty: return [], []
         
@@ -205,7 +207,8 @@ def comando_ayuda(message):
         "📌 *Comandos Disponibles:*\n"
         "🔹 /rifa4 - Sugerencias de 4 cifras (Super Gana)\n"
         "🔹 /rifa5 - Sugerencias de 5 cifras (Super + Terminal Triple)\n\n"
-        "🔹 /actualizar - Extraer últimos resultados web (Scraper manual)"
+        "🔹 /patron DD/MM HORA - Análisis estacional detallado (Ej: `/patron 17/03 1 pm`)\n\n"
+        "🔹 /actualizar - Extraer últimos resultados web (Te avisaré al terminar)"
     )
     bot.reply_to(message, bienvenida, parse_mode="Markdown")
 
@@ -258,115 +261,96 @@ def comando_patron_estacional_hora(message):
     try:
         # 1. Validar input
         argumentos = message.text.split(" ", 2) 
-        
         if len(argumentos) < 3:
-            bot.reply_to(message, "⚠️ *Formato incorrecto.*\nPor favor usa: `/patron DD/MM HORA`\nEjemplo: `/patron 17/03 10 pm`", parse_mode="Markdown")
+            bot.reply_to(message, "⚠️ *Formato incorrecto.*\nPor favor usa: `/patron DD/MM HORA`\nEjemplo: `/patron 17/03 1 pm`", parse_mode="Markdown")
             return
             
         fecha_input = argumentos[1].strip()
         hora_input = argumentos[2].strip() 
         
-        # 2. Parseo y Extracción de Día y Mes
+        # 2. Parseo de fecha
         try:
-            # Añadir año actual para evitar DeprecationWarning en Python 3.14+
             fecha_str_con_anio = f"{fecha_input}/{datetime.now().year}"
             fecha_parseada = datetime.strptime(fecha_str_con_anio, "%d/%m/%Y")
-            dia_objetivo = fecha_parseada.day
-            mes_objetivo = fecha_parseada.month
+            dia_obj = fecha_parseada.day
+            mes_obj = fecha_parseada.month
+            dia_semana = fecha_parseada.weekday() # 0=Lunes
         except ValueError:
-            bot.reply_to(message, "❌ *Error de fecha.*\nUsa el formato exacto de Día/Mes. Ejemplo: `/patron 17/03 12:00 PM`", parse_mode="Markdown")
+            bot.reply_to(message, "❌ *Error de fecha.* Usa DD/MM. Ej: `/patron 17/03 1 pm`", parse_mode="Markdown")
             return
             
         bot.send_chat_action(message.chat.id, 'typing')
-        bot.reply_to(message, f"🔍 Analizando combinaciones del _{fecha_input}_ para el horario *{hora_input}*...", parse_mode="Markdown")
-
-        # 3. Lectura y preparación de datos
+        if not os.path.exists(CSV_FILE):
+             bot.reply_to(message, "⚠ Base de datos no encontrada. Ejecuta /actualizar.")
+             return
+             
         df = pd.read_csv(CSV_FILE)
         if df.empty:
-            bot.reply_to(message, "⚠ Aún no hay registros en la base de datos local.")
+            bot.reply_to(message, "⚠ Base de datos vacía. Ejecuta /actualizar.")
             return
-            
-        # Nos aseguramos de tener la columna fecha como datetimes válidos
+
+        # Preparar datos
         df['Fecha_DT'] = pd.to_datetime(df['Fecha'], errors='coerce')
         df = df.dropna(subset=['Fecha_DT'])
+        df['Sorteo'] = df['Sorteo'].fillna('').astype(str)
+        df['SuperGana'] = df['SuperGana'].astype(str).str.zfill(4)
+        df['TripleGana'] = df['TripleGana'].astype(str).str.extract(r'(\d)')[0]
+        df = df.dropna(subset=['TripleGana'])
+        df['Combo5'] = df['SuperGana'] + df['TripleGana']
         
-        # Como es posible que en el CSV haya campos nulos en sorteo, los rellenamos con vacíos
-        df['Sorteo'] = df['Sorteo'].fillna('')
-
-        # 4. APLICAR EL FILTRO DOBLE (Fecha estacional + Hora)
-        # Filtramos primero por el patrón de día y mes
-        filtro_fecha = (df['Fecha_DT'].dt.day == dia_objetivo) & (df['Fecha_DT'].dt.month == mes_objetivo)
-        
-        # Luego aplicamos str.contains para buscar partes de la hora dentro del nombre del sorteo
-        # (na=False para evitar excepciones con nulos, case=False ignora mayúsculas/minúsculas)
+        # Filtro de Hora Global
         filtro_hora = df['Sorteo'].str.contains(hora_input, case=False, na=False)
-        
-        # Aplicamos ambas condiciones
-        df_filtrado = df[filtro_fecha & filtro_hora].copy()
-        
-        if df_filtrado.empty:
-             bot.reply_to(message, f"⚠️ *Muestra Inexistente.*\nNo existen registros históricos en mi base para el día *{fecha_input}* a la hora *{hora_input}*.", parse_mode="Markdown")
-             return
-        
-        # Consideramos muestra muy pequeña si hay muy pocos resultados históricos (ej. menos de 3 repeticiones)     
-        if len(df_filtrado) < 3:
-             bot.reply_to(message, f"⚠️ *Alerta de Muestra Pequeña.*\nSolo existen *{len(df_filtrado)}* registros históricos para el _{fecha_input}_ a las _{hora_input}_. El cálculo de probabilidad es débil para este horario.", parse_mode="Markdown")
+        df_hora = df[filtro_hora].copy()
 
-        # 5. Normalización de Cadenas de Texto
-        df_filtrado['SuperGana'] = df_filtrado['SuperGana'].astype(str).str.zfill(4)
-        df_filtrado['TripleGana'] = df_filtrado['TripleGana'].astype(str).str.extract(r'(\d)')[0]
-        df_filtrado = df_filtrado.dropna(subset=['TripleGana'])
+        # CAPAS DE ANÁLISIS
+        # C1: Fecha exacta
+        c1 = df_hora[(df_hora['Fecha_DT'].dt.day == dia_obj) & (df_hora['Fecha_DT'].dt.month == mes_obj)]
+        # C2: Mismo Mes + Mismo día de la semana
+        c2 = df_hora[(df_hora['Fecha_DT'].dt.month == mes_obj) & (df_hora['Fecha_DT'].dt.weekday == dia_semana)]
+        # C3: Todo el Mes
+        c3 = df_hora[df_hora['Fecha_DT'].dt.month == mes_obj]
 
-        # 6. Cálculo Frecuencias TOP 10
-        # Super Gana (4 dígitos)
-        frecuencias_4 = df_filtrado['SuperGana'].value_counts()
-        top_10_4_digitos = frecuencias_4.head(10).index.tolist()
-        
-        # Super + Triple (5 dígitos)
-        serie_5_digitos = df_filtrado['SuperGana'] + df_filtrado['TripleGana']
-        frecuencias_5 = serie_5_digitos.value_counts()
-        top_10_5_digitos = frecuencias_5.head(10).index.tolist()
-        
-        # Relleno visual en caso de que sean menos de 10
-        if len(top_10_4_digitos) < 10:
-             top_10_4_digitos.extend(["-" for _ in range(10 - len(top_10_4_digitos))])
-        if len(top_10_5_digitos) < 10:
-             top_10_5_digitos.extend(["-" for _ in range(10 - len(top_10_5_digitos))])
-        
-        # 7. Rendering de la Respuesta
-        texto_respuesta = f"📅 *Análisis Estacional: {fecha_input} | 🕒 {hora_input}*\n"
-        texto_respuesta += f"_Sorteos históricos analizados bajo estas condiciones exactas: {len(df_filtrado)}_\n\n"
-        
-        texto_respuesta += "📘 *Mayor repetición (4 Cifras):*\n"
-        for num in top_10_4_digitos:
-            texto_respuesta += f" ➥ `{num}`\n"
-            
-        texto_respuesta += "\n📙 *Mayor repetición (5 Cifras):*\n"
-        for num in top_10_5_digitos:
-             texto_respuesta += f" ➥ `{num}`\n"
-             
-        texto_respuesta += DISCLAIMER
-        
-        bot.send_message(message.chat.id, texto_respuesta, parse_mode="Markdown")
+        # RECOLECCIÓN
+        fuente_top = c2 if len(c2) >= 8 else c3
+        top3_4 = fuente_top['SuperGana'].value_counts().head(3).index.tolist()
+        top3_5 = fuente_top['Combo5'].value_counts().head(3).index.tolist()
 
+        # Posicional (Mes completo)
+        p1 = c3['SuperGana'].str[0].mode()[0] if not c3.empty else '?'
+        p2 = c3['SuperGana'].str[1].mode()[0] if not c3.empty else '?'
+        p3 = c3['SuperGana'].str[2].mode()[0] if not c3.empty else '?'
+        p4 = c3['SuperGana'].str[3].mode()[0] if not c3.empty else '?'
+        term = c3['TripleGana'].mode()[0] if not c3.empty else '?'
+
+        res = f"📅 *ANÁLISIS DE PATRÓN: {fecha_input} | 🕒 {hora_input}*\n"
+        res += f"_Muestra histórica analizada: {len(c3)} sorteos de este mes._\n\n"
+        res += "� *TOP 3 NÚMEROS RECOMENDADOS (4 Cifras):*\n"
+        for i, n in enumerate(top3_4, 1):
+            medalla = ["🥇", "🥈", "🥉"][i-1]
+            res += f"{medalla} `{n}`\n"
+        res += "\n� *TOP 3 NÚMEROS RECOMENDADOS (5 Cifras):*\n"
+        for i, n in enumerate(top3_5, 1):
+            medalla = ["🥇", "🥈", "🥉"][i-1]
+            res += f"{medalla} `{n}`\n"
+        res += f"\n🧠 *NÚMERO POR POSICIÓN (Tendencia):*\n➥ `{p1}{p2}{p3}{p4}` | Terminal: `{term}`\n"
+        if len(c1) > 0:
+            res += f"\n📜 *En fechas exactas anteriores salió:* `{', '.join(c1['SuperGana'].unique())}`"
+        res += DISCLAIMER
+        bot.reply_to(message, res, parse_mode="Markdown")
     except Exception as e:
-        bot.reply_to(message, f"❌ Ocurrió un error en el motor estadístico: `{e}`", parse_mode="Markdown")
-
+        bot.reply_to(message, f"❌ Error en motor: `{e}`")
 
 # ==========================================
 # INICIO DE EJECUCIÓN
 # ==========================================
 if __name__ == "__main__":
     print("🤖 Iniciando Bot de Telegram...")
-    # Crear archivo CSV vacío con cabeceras si no existe
     if not os.path.exists(CSV_FILE):
         pd.DataFrame(columns=['Fecha', 'Sorteo', 'SuperGana', 'TripleGana']).to_csv(CSV_FILE, index=False)
-        print("📁 Archivo CSV base creado con éxito.")
     
     print("✅ Bot funcionando fluido. Presiona Ctrl+C para detener.")
     try:
-        # infinity_polling mantiene levantado el bot de manera recursiva contra los servidores REST de Telegram
-        bot.infinity_polling(timeout=10, long_polling_timeout=5)
+        bot.infinity_polling(timeout=15, long_polling_timeout=5)
     except (KeyboardInterrupt, SystemExit):
         import sys
         sys.exit()
