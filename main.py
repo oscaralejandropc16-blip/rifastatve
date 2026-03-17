@@ -166,27 +166,43 @@ def comando_patron_estacional_hora(message):
         df['SuperGana'] = df['SuperGana'].astype(str).str.zfill(4)
         df['TripleGana'] = df['TripleGana'].astype(str).str.extract(r'(\d)')[0]
         df = df.dropna(subset=['TripleGana'])
-        df['Combo5'] = df['SuperGana'] + df['TripleGana']
         df['Sorteo'] = df['Sorteo'].fillna('').astype(str)
 
-        # Filtro de Hora Global
+        # 1. Filtro de Hora Global
         df_hora = df[df['Sorteo'].str.contains(hora_input, case=False, na=False)].copy()
 
-        # CAPAS DE ANÁLISIS (SISTEMA DE PESOS)
-        # C1: Fecha exacta en años anteriores
+        # 2. LÓGICA DE NIVEL 2: SUCESORES (El "Truco del Algoritmo")
+        # Buscamos qué salió hoy a la 1 pm (si estamos analizando 4 pm o 10 pm)
+        sugerencias_sucesoras = []
+        if "4 pm" in hora_input or "10 pm" in hora_input:
+            # Buscar el resultado de la 1 pm de HOY en el DF (que debe haberse actualizado)
+            hoy_str = datetime.now().strftime("%Y-%m-%d")
+            res_1pm = df[(df['Fecha'] == hoy_str) & (df['Sorteo'].str.contains("1 pm"))]
+            
+            if not res_1pm.empty:
+                val_1pm = res_1pm.iloc[-1]['SuperGana']
+                # Buscar históricamente qué salió después de ese número en ese mismo día
+                indices = df[df['SuperGana'] == val_1pm].index
+                for idx in indices:
+                    if idx + 1 < len(df):
+                        next_row = df.iloc[idx + 1]
+                        if hora_input.lower() in next_row['Sorteo'].lower():
+                            sugerencias_sucesoras.append(next_row['SuperGana'])
+
+        # 3. CAPAS DE ANÁLISIS (SISTEMA DE PESOS)
         c1 = df_hora[(df_hora['Fecha_DT'].dt.day == dia_obj) & (df_hora['Fecha_DT'].dt.month == mes_obj)]
-        # C2: Misma semana del mes (Ej: segunda semana de marzo)
         semana_mes = (dia_obj - 1) // 7 + 1
         c2 = df_hora[(df_hora['Fecha_DT'].dt.month == mes_obj) & (((df_hora['Fecha_DT'].dt.day - 1) // 7 + 1) == semana_mes)]
-        # C3: Mismo día de la semana en este mes
         c3 = df_hora[(df_hora['Fecha_DT'].dt.month == mes_obj) & (df_hora['Fecha_DT'].dt.weekday == dia_semana)]
-        # C4: Todo el Mes
-        c4 = df_hora[df_hora['Fecha_DT'].dt.month == mes_obj]
-
-        # RECOLECCIÓN DE COINCIDENCIAS (Triple Filtro)
-        todos_sugeridos = pd.concat([c1['SuperGana'], c2['SuperGana'], c3['SuperGana']])
-        frecuencia_total = todos_sugeridos.value_counts()
         
+        # Unimos todo con pesos: Sucesores valen x3, Fecha exacta vale x2, Otros valen x1
+        pool = []
+        pool.extend(sugerencias_sucesoras * 3)
+        pool.extend(c1['SuperGana'].tolist() * 2)
+        pool.extend(c2['SuperGana'].tolist())
+        pool.extend(c3['SuperGana'].tolist())
+        
+        frecuencia_total = pd.Series(pool).value_counts()
         top3_estelares = frecuencia_total.head(3).index.tolist()
 
         # CONSTRUCCIÓN DE RESPUESTA (TOP 3)
