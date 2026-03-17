@@ -180,12 +180,15 @@ def comando_patron_estacional_hora(message):
             res_4pm = df[(df['Fecha'] == hoy_str) & (df['Sorteo'].str.contains("4 pm"))]
             if not res_4pm.empty:
                 val_4pm = res_4pm.iloc[-1]['SuperGana']
-            else:
-                # Si el scraper aún no guardó el de las 4pm, usamos el que detectamos manualmente
+            elif hoy_str == "2026-03-17":
+                # Solo para hoy 17, si el scraper va lento, usamos el detectado
                 val_4pm = "7357"
+            else:
+                val_4pm = None
             
-            # Buscar históricamente qué salió a las 10pm después de ese valor a las 4pm
-            indices = df[df['SuperGana'] == val_4pm].index
+            if val_4pm:
+                # Buscar históricamente qué salió a las 10pm después de ese valor a las 4pm
+                indices = df[df['SuperGana'] == val_4pm].index
             for idx in indices:
                 if idx + 1 < len(df):
                     next_row = df.iloc[idx + 1]
