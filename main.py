@@ -102,13 +102,13 @@ DISCLAIMER = "\n_⚠️ La lotería es azar. Estos números son sugerencias basa
 @bot.message_handler(commands=['start', 'help'])
 def comando_ayuda(message):
     bienvenida = (
-        "🧠 *SISTEMA DE PREDICCIÓN E INFALIBILIDAD ESTADÍSTICA*\n\n"
-        "He eliminado las sugerencias genéricas. Ahora nos enfocamos en **análisis de precisión por fecha y hora**.\n\n"
-        "📌 *¿Cómo consultar un número seguro?*\n"
-        "Usa el comando `/patron` seguido de la fecha y la hora que deseas jugar.\n\n"
-        "🔹 `/patron DD/MM HORA` \n"
-        "Ejemplo: `/patron 17/03 4 pm` o `/patron 17/03 10 pm`\n\n"
-        "🔹 `/actualizar` - Poner al día la base de datos (Últimos 30 días)."
+        "💎 *RIFASTATS VE — INTELIGENCIA ESTADÍSTICA*\n\n"
+        "Bienvenido al sistema avanzado de proyección de loterías. Mi motor analiza patrones históricos, estacionales y posicionales para ofrecerte las mejores probabilidades.\n\n"
+        "📌 *¿Cómo obtener una predicción?*\n"
+        "Consulta el análisis específico para una fecha y hora:\n"
+        "➥ `/patron DD/MM HORA` \n\n"
+        "💡 *Ejemplo:* `/patron 17/03 4 pm` o `/patron 17/03 10 pm`\n\n"
+        "� `/actualizar` - Sincroniza los últimos resultados del servidor."
     )
     bot.reply_to(message, bienvenida, parse_mode="Markdown")
 
