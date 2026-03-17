@@ -242,9 +242,6 @@ def comando_patron_estacional_hora(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error en motor: `{e}`")
 
-    except Exception as e:
-        bot.reply_to(message, f"❌ Error en motor: `{e}`")
-
 # ==========================================
 # INICIO DE EJECUCIÓN
 # ==========================================
