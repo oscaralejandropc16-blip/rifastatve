@@ -172,21 +172,32 @@ def comando_patron_estacional_hora(message):
         df_hora = df[df['Sorteo'].str.contains(hora_input, case=False, na=False)].copy()
 
         # 2. LÓGICA DE NIVEL 2: SUCESORES (El "Truco del Algoritmo")
-        # Buscamos qué salió hoy a la 1 pm (si estamos analizando 4 pm o 10 pm)
         sugerencias_sucesoras = []
-        if "4 pm" in hora_input or "10 pm" in hora_input:
-            # Buscar el resultado de la 1 pm de HOY en el DF (que debe haberse actualizado)
-            hoy_str = datetime.now().strftime("%Y-%m-%d")
+        hoy_str = datetime.now().strftime("%Y-%m-%d")
+        
+        # Analizar 10 pm basándose en 4 pm de hoy
+        if "10 pm" in hora_input.lower():
+            res_4pm = df[(df['Fecha'] == hoy_str) & (df['Sorteo'].str.contains("4 pm"))]
+            if not res_4pm.empty:
+                val_4pm = res_4pm.iloc[-1]['SuperGana']
+                # Buscar históricamente qué salió a las 10pm después de ese valor a las 4pm
+                indices = df[df['SuperGana'] == val_4pm].index
+                for idx in indices:
+                    if idx + 1 < len(df):
+                        next_row = df.iloc[idx + 1]
+                        if "10 pm" in next_row['Sorteo'].lower():
+                            sugerencias_sucesoras.append(next_row['SuperGana'])
+        
+        # Analizar 4 pm basándose en 1 pm de hoy (lo que ya teníamos)
+        elif "4 pm" in hora_input.lower():
             res_1pm = df[(df['Fecha'] == hoy_str) & (df['Sorteo'].str.contains("1 pm"))]
-            
             if not res_1pm.empty:
                 val_1pm = res_1pm.iloc[-1]['SuperGana']
-                # Buscar históricamente qué salió después de ese número en ese mismo día
                 indices = df[df['SuperGana'] == val_1pm].index
                 for idx in indices:
                     if idx + 1 < len(df):
                         next_row = df.iloc[idx + 1]
-                        if hora_input.lower() in next_row['Sorteo'].lower():
+                        if "4 pm" in next_row['Sorteo'].lower():
                             sugerencias_sucesoras.append(next_row['SuperGana'])
 
         # 3. CAPAS DE ANÁLISIS (SISTEMA DE PESOS)
