@@ -187,25 +187,30 @@ def comando_patron_estacional_hora(message):
                 val_4pm = None
             
             if val_4pm:
-                # Buscar históricamente qué salió a las 10pm después de ese valor a las 4pm
-                indices = df[df['SuperGana'] == val_4pm].index
-            for idx in indices:
-                if idx + 1 < len(df):
-                    next_row = df.iloc[idx + 1]
-                    if "10 pm" in next_row['Sorteo'].lower():
-                        sugerencias_sucesoras.append(next_row['SuperGana'])
+                terminal_4pm = str(val_4pm)[-2:]
+                # Buscar históricamente qué salió a las 10pm después de un 4pm con el mismo terminal
+                indices_4pm = df[df['Sorteo'].str.contains("4 pm", case=False, na=False)].index
+                for idx in indices_4pm:
+                    curr_row = df.iloc[idx]
+                    if str(curr_row['SuperGana']).endswith(terminal_4pm):
+                        if idx + 1 < len(df):
+                            next_row = df.iloc[idx + 1]
+                            if "10 pm" in str(next_row['Sorteo']).lower():
+                                sugerencias_sucesoras.append(next_row['SuperGana'])
         
         # Analizar 4 pm basándose en 1 pm de hoy (lo que ya teníamos)
         elif "4 pm" in hora_input.lower():
             res_1pm = df[(df['Fecha'] == hoy_str) & (df['Sorteo'].str.contains("1 pm"))]
             if not res_1pm.empty:
                 val_1pm = res_1pm.iloc[-1]['SuperGana']
-                indices = df[df['SuperGana'] == val_1pm].index
-                for idx in indices:
-                    if idx + 1 < len(df):
-                        next_row = df.iloc[idx + 1]
-                        if "4 pm" in next_row['Sorteo'].lower():
-                            sugerencias_sucesoras.append(next_row['SuperGana'])
+                indices_1pm = df[df['Sorteo'].str.contains("1 pm", case=False, na=False)].index
+                for idx in indices_1pm:
+                    curr_row = df.iloc[idx]
+                    if str(curr_row['SuperGana']) == str(val_1pm):
+                        if idx + 1 < len(df):
+                            next_row = df.iloc[idx + 1]
+                            if "4 pm" in str(next_row['Sorteo']).lower():
+                                sugerencias_sucesoras.append(next_row['SuperGana'])
 
         # 3. CAPAS DE ANÁLISIS (SISTEMA DE PESOS)
         c1 = df_hora[(df_hora['Fecha_DT'].dt.day == dia_obj) & (df_hora['Fecha_DT'].dt.month == mes_obj)]
