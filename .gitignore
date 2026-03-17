@@ -1,0 +1,24 @@
+# Variables de entorno - NUNCA subir a GitHub
+.env
+
+# Archivos temporales y de análisis local
+analisis_hoy.py
+dump.py
+dump2.py
+dump3.py
+full_page.html
+pruebah.html
+logo.png
+
+# El CSV se regenera automáticamente en el servidor
+historial_loterias.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/

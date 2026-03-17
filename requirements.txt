@@ -1,0 +1,7 @@
+requests==2.31.0
+beautifulsoup4==4.12.3
+pandas==2.2.0
+pyTelegramBotAPI==4.15.4
+python-dotenv==1.0.1
+urllib3==2.2.1
+lxml==5.2.1
