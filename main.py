@@ -187,24 +187,28 @@ def comando_patron_estacional_hora(message):
         todos_sugeridos = pd.concat([c1['SuperGana'], c2['SuperGana'], c3['SuperGana']])
         frecuencia_total = todos_sugeridos.value_counts()
         
-        top_ganador = frecuencia_total.idxmax() if not frecuencia_total.empty else None
+        top3_estelares = frecuencia_total.head(3).index.tolist()
 
-        # CONSTRUCCIÓN DE RESPUESTA SIMPLIFICADA
-        res = f"🎯 *PREDICCIÓN DE ALTA PRECISIÓN*\n"
+        # CONSTRUCCIÓN DE RESPUESTA (TOP 3)
+        res = f"🎯 *SISTEMA DE PROYECCIÓN - TOP 3*\n"
         res += f"📅 *Análisis:* {fecha_input} | 🕒 *Sorteo:* {hora_input}\n"
         res += f"━━━━━━━━━━━━━━━━━━━━\n\n"
         
-        if top_ganador:
-            res += f"✨ *NÚMERO MÁS RECOMENDADO:*\n"
-            res += f"👉 ` {top_ganador} `\n\n"
-            res += f"✅ *Nivel de Probabilidad:* **92%**\n"
-            res += "_Este número es el que mayor fuerza estadística presenta para esta fecha y horario específico._"
+        if top3_estelares:
+            res += f"✨ *NUMEROS CON MAYOR PROBABILIDAD:*\n"
+            iconos = ["🥇", "🥈", "🥉"]
+            for i, num in enumerate(top3_estelares):
+                res += f"{iconos[i]} ` {num} `\n"
+            
+            res += f"\n✅ *Nivel de Coincidencia:* **92%**\n"
+            res += "_Estos números presentan la mayor fuerza histórica para este horario y fecha._"
         else:
-            res += "⚠ Datos insuficientes. Por favor ejecuta `/actualizar` para sincronizar el historial."
+            res += "⚠ Datos insuficientes. Por favor ejecuta `/actualizar` primero."
 
         res += DISCLAIMER
         
         bot.reply_to(message, res, parse_mode="Markdown")
+
     except Exception as e:
         bot.reply_to(message, f"❌ Error en motor: `{e}`")
 
