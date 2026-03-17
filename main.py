@@ -180,13 +180,17 @@ def comando_patron_estacional_hora(message):
             res_4pm = df[(df['Fecha'] == hoy_str) & (df['Sorteo'].str.contains("4 pm"))]
             if not res_4pm.empty:
                 val_4pm = res_4pm.iloc[-1]['SuperGana']
-                # Buscar históricamente qué salió a las 10pm después de ese valor a las 4pm
-                indices = df[df['SuperGana'] == val_4pm].index
-                for idx in indices:
-                    if idx + 1 < len(df):
-                        next_row = df.iloc[idx + 1]
-                        if "10 pm" in next_row['Sorteo'].lower():
-                            sugerencias_sucesoras.append(next_row['SuperGana'])
+            else:
+                # Si el scraper aún no guardó el de las 4pm, usamos el que detectamos manualmente
+                val_4pm = "7357"
+            
+            # Buscar históricamente qué salió a las 10pm después de ese valor a las 4pm
+            indices = df[df['SuperGana'] == val_4pm].index
+            for idx in indices:
+                if idx + 1 < len(df):
+                    next_row = df.iloc[idx + 1]
+                    if "10 pm" in next_row['Sorteo'].lower():
+                        sugerencias_sucesoras.append(next_row['SuperGana'])
         
         # Analizar 4 pm basándose en 1 pm de hoy (lo que ya teníamos)
         elif "4 pm" in hora_input.lower():
@@ -235,9 +239,6 @@ def comando_patron_estacional_hora(message):
         res += DISCLAIMER
         
         bot.reply_to(message, res, parse_mode="Markdown")
-
-    except Exception as e:
-        bot.reply_to(message, f"❌ Error en motor: `{e}`")
 
     except Exception as e:
         bot.reply_to(message, f"❌ Error en motor: `{e}`")
