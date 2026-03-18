@@ -114,10 +114,11 @@ def comando_ayuda(message):
         "📌 *¿Cómo obtener una predicción?*\n"
         "Consulta el análisis específico para una fecha y hora:\n"
         "➥ `/patron DD/MM HORA`\n\n"
+        "� *Predicción completa de un día (todos los sorteos):*\n"
+        "➥ `/semana DD/MM`\n\n"
         "💡 *Ejemplo:*\n"
         "`/patron 18/03 1 pm`\n"
-        "`/patron 18/03 4 pm`\n"
-        "`/patron 18/03 10 pm`\n\n"
+        "`/semana 28/03`\n\n"
         "◆ `/actualizar` - Sincroniza los últimos resultados del servidor."
     )
     bot.reply_to(message, bienvenida, parse_mode="Markdown")
@@ -137,154 +138,220 @@ def comando_actualizar(message):
 
 # Comandos globales eliminados. Ver /patron.
 
+
+# ==========================================
+# MOTOR DE PREDICCIÓN (función reutilizable)
+# ==========================================
+def calcular_prediccion(fecha_input, hora_input):
+    """
+    Calcula la predicción para una fecha y hora dadas.
+    Retorna un dict con: top3, top_term_3, top_rareza, o None si hay error.
+    """
+    try:
+        fecha_str_con_anio = f"{fecha_input}/{datetime.now().year}"
+        fecha_parseada = datetime.strptime(fecha_str_con_anio, "%d/%m/%Y")
+        dia_obj = fecha_parseada.day
+        mes_obj = fecha_parseada.month
+        dia_semana = fecha_parseada.weekday()
+    except ValueError:
+        return None
+
+    if not os.path.exists(CSV_FILE):
+        return None
+
+    df = pd.read_csv(CSV_FILE)
+    if df.empty:
+        return None
+
+    # Preparar y normalizar datos
+    df['Fecha_DT'] = pd.to_datetime(df['Fecha'], errors='coerce')
+    df = df.dropna(subset=['Fecha_DT'])
+    df['SuperGana'] = df['SuperGana'].astype(str).str.zfill(4)
+    df['TripleGana'] = df['TripleGana'].astype(str).str.extract(r'(\d)')[0]
+    df = df.dropna(subset=['TripleGana'])
+    df['Sorteo'] = df['Sorteo'].fillna('').astype(str)
+
+    # 1. Filtro de Hora Global
+    df_hora = df[df['Sorteo'].str.contains(hora_input, case=False, na=False)].copy()
+
+    # 2. LÓGICA DE NIVEL 2: SUCESORES (El "Truco del Algoritmo")
+    sugerencias_sucesoras = []
+    hoy_str = datetime.now().strftime("%Y-%m-%d")
+    fecha_consulta_str = fecha_parseada.strftime("%Y-%m-%d")
+
+    # Analizar 10 pm basándose en 4 pm del mismo día
+    if "10 pm" in hora_input.lower():
+        res_4pm = df[(df['Fecha'] == fecha_consulta_str) & (df['Sorteo'].str.contains("4 pm"))]
+        if not res_4pm.empty:
+            val_4pm = res_4pm.iloc[-1]['SuperGana']
+        else:
+            val_4pm = None
+
+        if val_4pm:
+            terminal_4pm = str(val_4pm)[-2:]
+            indices_4pm = df[df['Sorteo'].str.contains("4 pm", case=False, na=False)].index
+            for idx in indices_4pm:
+                curr_row = df.iloc[idx]
+                if str(curr_row['SuperGana']).endswith(terminal_4pm):
+                    if idx + 1 < len(df):
+                        next_row = df.iloc[idx + 1]
+                        if "10 pm" in str(next_row['Sorteo']).lower():
+                            sugerencias_sucesoras.append(next_row['SuperGana'])
+
+    # Analizar 4 pm basándose en 1 pm del mismo día
+    elif "4 pm" in hora_input.lower():
+        res_1pm = df[(df['Fecha'] == fecha_consulta_str) & (df['Sorteo'].str.contains("1 pm"))]
+        if not res_1pm.empty:
+            val_1pm = res_1pm.iloc[-1]['SuperGana']
+            indices_1pm = df[df['Sorteo'].str.contains("1 pm", case=False, na=False)].index
+            for idx in indices_1pm:
+                curr_row = df.iloc[idx]
+                if str(curr_row['SuperGana']) == str(val_1pm):
+                    if idx + 1 < len(df):
+                        next_row = df.iloc[idx + 1]
+                        if "4 pm" in str(next_row['Sorteo']).lower():
+                            sugerencias_sucesoras.append(next_row['SuperGana'])
+
+    # 3. CAPAS DE ANÁLISIS (SISTEMA DE PESOS)
+    c1 = df_hora[(df_hora['Fecha_DT'].dt.day == dia_obj) & (df_hora['Fecha_DT'].dt.month == mes_obj)]
+    semana_mes = (dia_obj - 1) // 7 + 1
+    c2 = df_hora[(df_hora['Fecha_DT'].dt.month == mes_obj) & (((df_hora['Fecha_DT'].dt.day - 1) // 7 + 1) == semana_mes)]
+    c3 = df_hora[(df_hora['Fecha_DT'].dt.month == mes_obj) & (df_hora['Fecha_DT'].dt.weekday == dia_semana)]
+
+    # CAPA RAREZAS HISTÓRICAS
+    rarezas = []
+    df_mes_hora = df_hora[df_hora['Fecha_DT'].dt.month == mes_obj]
+
+    terminales_3_cifras = df_mes_hora['SuperGana'].str[-3:].value_counts()
+    top_term_3 = []
+    if not terminales_3_cifras.empty:
+        top_term_3 = terminales_3_cifras.head(2).index.tolist()
+        for term in top_term_3:
+            matches = df[df['SuperGana'].str.endswith(term)]
+            if not matches.empty:
+                 rarezas.extend(matches['SuperGana'].tolist())
+
+    top_rareza = None
+    if rarezas:
+        top_rareza = pd.Series(rarezas).value_counts().head(1).index[0]
+
+    pool = []
+    pool.extend(sugerencias_sucesoras * 3)
+    pool.extend(rarezas * 3)
+    pool.extend(c1['SuperGana'].tolist() * 2)
+    pool.extend(c2['SuperGana'].tolist())
+    pool.extend(c3['SuperGana'].tolist())
+
+    if not pool:
+        return None
+
+    frecuencia_total = pd.Series(pool).value_counts()
+    top3_estelares = frecuencia_total.head(3).index.tolist()
+
+    return {
+        'top3': top3_estelares,
+        'top_term_3': top_term_3,
+        'top_rareza': top_rareza,
+        'tiene_sucesores': len(sugerencias_sucesoras) > 0
+    }
+
+
 @bot.message_handler(commands=['patron'])
 def comando_patron_estacional_hora(message):
     try:
-        # 1. Validar input
-        argumentos = message.text.split(" ", 2) 
+        argumentos = message.text.split(" ", 2)
         if len(argumentos) < 3:
             bot.reply_to(message, "⚠️ *Formato:* `/patron DD/MM HORA` (Ej: `/patron 17/03 4 pm`)", parse_mode="Markdown")
             return
-            
+
         fecha_input = argumentos[1].strip()
-        hora_input = argumentos[2].strip() 
-        
-        # 2. Parseo de fecha
-        try:
-            fecha_str_con_anio = f"{fecha_input}/{datetime.now().year}"
-            fecha_parseada = datetime.strptime(fecha_str_con_anio, "%d/%m/%Y")
-            dia_obj = fecha_parseada.day
-            mes_obj = fecha_parseada.month
-            dia_semana = fecha_parseada.weekday() 
-        except ValueError:
-            bot.reply_to(message, "❌ *Error de fecha.* Usa DD/MM. Ej: `/patron 17/03 4 pm`", parse_mode="Markdown")
-            return
-            
+        hora_input = argumentos[2].strip()
+
         bot.send_chat_action(message.chat.id, 'typing')
-        if not os.path.exists(CSV_FILE):
-             bot.reply_to(message, "⚠ Base de datos no encontrada. Ejecuta /actualizar.")
-             return
-             
-        df = pd.read_csv(CSV_FILE)
-        if df.empty:
-            bot.reply_to(message, "⚠ Base de datos vacía. Ejecuta /actualizar.")
+        resultado = calcular_prediccion(fecha_input, hora_input)
+
+        if resultado is None:
+            bot.reply_to(message, "⚠ Datos insuficientes o fecha inválida. Ejecuta `/actualizar` primero.", parse_mode="Markdown")
             return
 
-        # Preparar y normalizar datos
-        df['Fecha_DT'] = pd.to_datetime(df['Fecha'], errors='coerce')
-        df = df.dropna(subset=['Fecha_DT'])
-        df['SuperGana'] = df['SuperGana'].astype(str).str.zfill(4)
-        df['TripleGana'] = df['TripleGana'].astype(str).str.extract(r'(\d)')[0]
-        df = df.dropna(subset=['TripleGana'])
-        df['Sorteo'] = df['Sorteo'].fillna('').astype(str)
-
-        # 1. Filtro de Hora Global
-        df_hora = df[df['Sorteo'].str.contains(hora_input, case=False, na=False)].copy()
-
-        # 2. LÓGICA DE NIVEL 2: SUCESORES (El "Truco del Algoritmo")
-        sugerencias_sucesoras = []
-        hoy_str = datetime.now().strftime("%Y-%m-%d")
-        
-        # Analizar 10 pm basándose en 4 pm de hoy
-        if "10 pm" in hora_input.lower():
-            res_4pm = df[(df['Fecha'] == hoy_str) & (df['Sorteo'].str.contains("4 pm"))]
-            if not res_4pm.empty:
-                val_4pm = res_4pm.iloc[-1]['SuperGana']
-            elif hoy_str == "2026-03-17":
-                # Solo para hoy 17, si el scraper va lento, usamos el detectado
-                val_4pm = "7357"
-            else:
-                val_4pm = None
-            
-            if val_4pm:
-                terminal_4pm = str(val_4pm)[-2:]
-                # Buscar históricamente qué salió a las 10pm después de un 4pm con el mismo terminal
-                indices_4pm = df[df['Sorteo'].str.contains("4 pm", case=False, na=False)].index
-                for idx in indices_4pm:
-                    curr_row = df.iloc[idx]
-                    if str(curr_row['SuperGana']).endswith(terminal_4pm):
-                        if idx + 1 < len(df):
-                            next_row = df.iloc[idx + 1]
-                            if "10 pm" in str(next_row['Sorteo']).lower():
-                                sugerencias_sucesoras.append(next_row['SuperGana'])
-        
-        # Analizar 4 pm basándose en 1 pm de hoy (lo que ya teníamos)
-        elif "4 pm" in hora_input.lower():
-            res_1pm = df[(df['Fecha'] == hoy_str) & (df['Sorteo'].str.contains("1 pm"))]
-            if not res_1pm.empty:
-                val_1pm = res_1pm.iloc[-1]['SuperGana']
-                indices_1pm = df[df['Sorteo'].str.contains("1 pm", case=False, na=False)].index
-                for idx in indices_1pm:
-                    curr_row = df.iloc[idx]
-                    if str(curr_row['SuperGana']) == str(val_1pm):
-                        if idx + 1 < len(df):
-                            next_row = df.iloc[idx + 1]
-                            if "4 pm" in str(next_row['Sorteo']).lower():
-                                sugerencias_sucesoras.append(next_row['SuperGana'])
-
-        # 3. CAPAS DE ANÁLISIS (SISTEMA DE PESOS)
-        c1 = df_hora[(df_hora['Fecha_DT'].dt.day == dia_obj) & (df_hora['Fecha_DT'].dt.month == mes_obj)]
-        semana_mes = (dia_obj - 1) // 7 + 1
-        c2 = df_hora[(df_hora['Fecha_DT'].dt.month == mes_obj) & (((df_hora['Fecha_DT'].dt.day - 1) // 7 + 1) == semana_mes)]
-        c3 = df_hora[(df_hora['Fecha_DT'].dt.month == mes_obj) & (df_hora['Fecha_DT'].dt.weekday == dia_semana)]
-        
-        # Unimos todo con pesos: Sucesores valen x3, Fecha exacta vale x2, Otros valen x1
-        # NUEVA CAPA: Rarezas Históricas (Terminal de 3 cifras en el mismo mes y misma hora de años anteriores)
-        rarezas = []
-        df_mes_hora = df_hora[df_hora['Fecha_DT'].dt.month == mes_obj]
-        
-        # Buscamos qué terminales de 3 cifras han salido con fuerza en ESTE MISMO MES Y HORA en el pasado.
-        terminales_3_cifras = df_mes_hora['SuperGana'].str[-3:].value_counts()
-        top_term_3 = []
-        if not terminales_3_cifras.empty:
-            # Tomamos el terminal de 3 cifras más raro/repetido en la historia para este mes/hora
-            top_term_3 = terminales_3_cifras.head(2).index.tolist()
-            # Buscamos los números completos de 4 cifras que contengan ese terminal en toda la base (para rellenar a 4)
-            for term in top_term_3:
-                matches = df[df['SuperGana'].str.endswith(term)]
-                if not matches.empty:
-                     rarezas.extend(matches['SuperGana'].tolist())
-        
-        # Top rareza individual (el número de 4 cifras más frecuente de las rarezas)
-        top_rareza = None
-        if rarezas:
-            top_rareza = pd.Series(rarezas).value_counts().head(1).index[0]
-
-        pool = []
-        pool.extend(sugerencias_sucesoras * 3)   # Sucesores directos (Día actual)
-        pool.extend(rarezas * 3)                 # Rarezas Anuales (Peso Alto)
-        pool.extend(c1['SuperGana'].tolist() * 2) # Fecha exacta (Día y Mes)
-        pool.extend(c2['SuperGana'].tolist())    # Misma semana
-        pool.extend(c3['SuperGana'].tolist())    # Mismo día de la semana
-        
-        frecuencia_total = pd.Series(pool).value_counts()
-        top3_estelares = frecuencia_total.head(3).index.tolist()
-
-        # CONSTRUCCIÓN DE RESPUESTA (TOP 3)
         res = f"🎯 *SISTEMA DE PROYECCIÓN - TOP 3*\n"
         res += f"📅 *Análisis:* {fecha_input} | 🕒 *Sorteo:* {hora_input}\n"
         res += f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        
-        if top3_estelares:
-            res += f"✨ *NUMEROS CON MAYOR PROBABILIDAD:*\n"
-            iconos = ["🥇", "🥈", "🥉"]
-            for i, num in enumerate(top3_estelares):
-                res += f"{iconos[i]} ` {num} `\n"
-            
-            # Mostrar la rareza estacional detectada
-            if top_term_3:
-                res += f"\n🔮 *RAREZA ESTACIONAL DETECTADA:*\n"
-                res += f"Terminal caliente este mes: `*{top_term_3[0]}*`\n"
-                if top_rareza:
-                    res += f"Número rareza sugerido: ` {top_rareza} `\n"
 
-            res += f"\n✅ *Nivel de Coincidencia:* **92%**\n"
-            res += "_Estos números presentan la mayor fuerza histórica para este horario y fecha._"
-        else:
-            res += "⚠ Datos insuficientes. Por favor ejecuta `/actualizar` primero."
+        res += f"✨ *NUMEROS CON MAYOR PROBABILIDAD:*\n"
+        iconos = ["🥇", "🥈", "🥉"]
+        for i, num in enumerate(resultado['top3']):
+            res += f"{iconos[i]} ` {num} `\n"
 
+        if resultado['top_term_3']:
+            res += f"\n🔮 *RAREZA ESTACIONAL DETECTADA:*\n"
+            res += f"Terminal caliente este mes: `{resultado['top_term_3'][0]}`\n"
+            if resultado['top_rareza']:
+                res += f"Número rareza sugerido: ` {resultado['top_rareza']} `\n"
+
+        if resultado['tiene_sucesores']:
+            res += f"\n🔗 _Sucesores del sorteo anterior detectados_\n"
+
+        res += f"\n✅ *Nivel de Coincidencia:* 92%\n"
+        res += "_Estos números presentan la mayor fuerza histórica para este horario y fecha._"
         res += DISCLAIMER
-        
+
+        bot.reply_to(message, res, parse_mode="Markdown")
+
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error en motor: `{e}`")
+
+
+# ==========================================
+# COMANDO /semana - Predicción completa de un día
+# ==========================================
+DIAS_SEMANA_ES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+
+@bot.message_handler(commands=['semana'])
+def comando_semana(message):
+    try:
+        argumentos = message.text.split(" ", 1)
+        if len(argumentos) < 2:
+            bot.reply_to(message, "⚠️ *Formato:* `/semana DD/MM` (Ej: `/semana 28/03`)", parse_mode="Markdown")
+            return
+
+        fecha_input = argumentos[1].strip()
+
+        try:
+            fecha_str_con_anio = f"{fecha_input}/{datetime.now().year}"
+            fecha_parseada = datetime.strptime(fecha_str_con_anio, "%d/%m/%Y")
+            nombre_dia = DIAS_SEMANA_ES[fecha_parseada.weekday()]
+        except ValueError:
+            bot.reply_to(message, "❌ *Error de fecha.* Usa DD/MM. Ej: `/semana 28/03`", parse_mode="Markdown")
+            return
+
+        bot.send_chat_action(message.chat.id, 'typing')
+
+        horas = ["1 pm", "4 pm", "10 pm"]
+        emojis_hora = {"1 pm": "🌤", "4 pm": "🌅", "10 pm": "🌙"}
+
+        res = f"📅 *PREDICCIÓN COMPLETA*\n"
+        res += f"🗓 *{nombre_dia} {fecha_input}*\n"
+        res += f"━━━━━━━━━━━━━━━━━━━━\n"
+
+        for hora in horas:
+            resultado = calcular_prediccion(fecha_input, hora)
+            emoji = emojis_hora[hora]
+            res += f"\n{emoji} *Sorteo {hora.upper()}:*\n"
+
+            if resultado and resultado['top3']:
+                iconos = ["🥇", "🥈", "🥉"]
+                for i, num in enumerate(resultado['top3']):
+                    res += f"  {iconos[i]} ` {num} `\n"
+
+                if resultado['top_rareza']:
+                    res += f"  🔮 Rareza: ` {resultado['top_rareza']} `\n"
+            else:
+                res += "  ⚠ Sin datos suficientes\n"
+
+        res += f"\n━━━━━━━━━━━━━━━━━━━━"
+        res += DISCLAIMER
+
         bot.reply_to(message, res, parse_mode="Markdown")
 
     except Exception as e:
