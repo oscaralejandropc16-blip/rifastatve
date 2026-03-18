@@ -115,10 +115,10 @@ def comando_ayuda(message):
         "Consulta el análisis específico para una fecha y hora:\n"
         "➥ `/patron DD/MM HORA`\n\n"
         "� *Predicción completa de un día (todos los sorteos):*\n"
-        "➥ `/semana DD/MM`\n\n"
+        "➥ `/dia DD/MM`\n\n"
         "💡 *Ejemplo:*\n"
         "`/patron 18/03 1 pm`\n"
-        "`/semana 28/03`\n\n"
+        "`/dia 29/03`\n\n"
         "◆ `/actualizar` - Sincroniza los últimos resultados del servidor."
     )
     bot.reply_to(message, bienvenida, parse_mode="Markdown")
@@ -303,16 +303,16 @@ def comando_patron_estacional_hora(message):
 
 
 # ==========================================
-# COMANDO /semana - Predicción completa de un día
+# COMANDO /dia - Predicción completa de un día
 # ==========================================
 DIAS_SEMANA_ES = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
 
-@bot.message_handler(commands=['semana'])
-def comando_semana(message):
+@bot.message_handler(commands=['dia'])
+def comando_dia(message):
     try:
         argumentos = message.text.split(" ", 1)
         if len(argumentos) < 2:
-            bot.reply_to(message, "⚠️ *Formato:* `/semana DD/MM` (Ej: `/semana 28/03`)", parse_mode="Markdown")
+            bot.reply_to(message, "⚠️ *Formato:* `/dia DD/MM` (Ej: `/dia 29/03`)", parse_mode="Markdown")
             return
 
         fecha_input = argumentos[1].strip()
@@ -322,7 +322,7 @@ def comando_semana(message):
             fecha_parseada = datetime.strptime(fecha_str_con_anio, "%d/%m/%Y")
             nombre_dia = DIAS_SEMANA_ES[fecha_parseada.weekday()]
         except ValueError:
-            bot.reply_to(message, "❌ *Error de fecha.* Usa DD/MM. Ej: `/semana 28/03`", parse_mode="Markdown")
+            bot.reply_to(message, "❌ *Error de fecha.* Usa DD/MM. Ej: `/dia 29/03`", parse_mode="Markdown")
             return
 
         bot.send_chat_action(message.chat.id, 'typing')
