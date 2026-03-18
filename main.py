@@ -103,12 +103,22 @@ DISCLAIMER = "\n_⚠️ La lotería es azar. Estos números son sugerencias basa
 def comando_ayuda(message):
     bienvenida = (
         "💎 *RIFASTATS VE — INTELIGENCIA ESTADÍSTICA*\n\n"
-        "Bienvenido al sistema avanzado de proyección de loterías. Mi motor analiza patrones históricos, estacionales y posicionales para ofrecerte las mejores probabilidades.\n\n"
+        "Bienvenido al sistema avanzado de proyección de loterías.\n\n"
+        "🧠 *¿Cómo funciona mi motor?*\n"
+        "Analizo 6 capas de datos para cada sorteo:\n"
+        "📊 Fecha exacta histórica\n"
+        "📊 Semana del mes + hora\n"
+        "📊 Día de la semana + hora\n"
+        "🔗 Sucesores directos (1pm→4pm→10pm)\n"
+        "🔮 *Rarezas Estacionales* — Terminales ocultos que se repiten cada año en el mismo mes y hora\n\n"
         "📌 *¿Cómo obtener una predicción?*\n"
         "Consulta el análisis específico para una fecha y hora:\n"
-        "➥ `/patron DD/MM HORA` \n\n"
-        "💡 *Ejemplo:* `/patron 17/03 4 pm` o `/patron 17/03 10 pm`\n\n"
-        "� `/actualizar` - Sincroniza los últimos resultados del servidor."
+        "➥ `/patron DD/MM HORA`\n\n"
+        "💡 *Ejemplo:*\n"
+        "`/patron 18/03 1 pm`\n"
+        "`/patron 18/03 4 pm`\n"
+        "`/patron 18/03 10 pm`\n\n"
+        "◆ `/actualizar` - Sincroniza los últimos resultados del servidor."
     )
     bot.reply_to(message, bienvenida, parse_mode="Markdown")
 
