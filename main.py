@@ -235,6 +235,7 @@ def comando_patron_estacional_hora(message):
         
         # Buscamos qué terminales de 3 cifras han salido con fuerza en ESTE MISMO MES Y HORA en el pasado.
         terminales_3_cifras = df_mes_hora['SuperGana'].str[-3:].value_counts()
+        top_term_3 = []
         if not terminales_3_cifras.empty:
             # Tomamos el terminal de 3 cifras más raro/repetido en la historia para este mes/hora
             top_term_3 = terminales_3_cifras.head(2).index.tolist()
@@ -244,6 +245,11 @@ def comando_patron_estacional_hora(message):
                 if not matches.empty:
                      rarezas.extend(matches['SuperGana'].tolist())
         
+        # Top rareza individual (el número de 4 cifras más frecuente de las rarezas)
+        top_rareza = None
+        if rarezas:
+            top_rareza = pd.Series(rarezas).value_counts().head(1).index[0]
+
         pool = []
         pool.extend(sugerencias_sucesoras * 3)   # Sucesores directos (Día actual)
         pool.extend(rarezas * 3)                 # Rarezas Anuales (Peso Alto)
@@ -265,6 +271,13 @@ def comando_patron_estacional_hora(message):
             for i, num in enumerate(top3_estelares):
                 res += f"{iconos[i]} ` {num} `\n"
             
+            # Mostrar la rareza estacional detectada
+            if top_term_3:
+                res += f"\n🔮 *RAREZA ESTACIONAL DETECTADA:*\n"
+                res += f"Terminal caliente este mes: `*{top_term_3[0]}*`\n"
+                if top_rareza:
+                    res += f"Número rareza sugerido: ` {top_rareza} `\n"
+
             res += f"\n✅ *Nivel de Coincidencia:* **92%**\n"
             res += "_Estos números presentan la mayor fuerza histórica para este horario y fecha._"
         else:
