@@ -219,11 +219,27 @@ def comando_patron_estacional_hora(message):
         c3 = df_hora[(df_hora['Fecha_DT'].dt.month == mes_obj) & (df_hora['Fecha_DT'].dt.weekday == dia_semana)]
         
         # Unimos todo con pesos: Sucesores valen x3, Fecha exacta vale x2, Otros valen x1
+        # NUEVA CAPA: Rarezas Históricas (Terminal de 3 cifras en el mismo mes y misma hora de años anteriores)
+        rarezas = []
+        df_mes_hora = df_hora[df_hora['Fecha_DT'].dt.month == mes_obj]
+        
+        # Buscamos qué terminales de 3 cifras han salido con fuerza en ESTE MISMO MES Y HORA en el pasado.
+        terminales_3_cifras = df_mes_hora['SuperGana'].str[-3:].value_counts()
+        if not terminales_3_cifras.empty:
+            # Tomamos el terminal de 3 cifras más raro/repetido en la historia para este mes/hora
+            top_term_3 = terminales_3_cifras.head(2).index.tolist()
+            # Buscamos los números completos de 4 cifras que contengan ese terminal en toda la base (para rellenar a 4)
+            for term in top_term_3:
+                matches = df[df['SuperGana'].str.endswith(term)]
+                if not matches.empty:
+                     rarezas.extend(matches['SuperGana'].tolist())
+        
         pool = []
-        pool.extend(sugerencias_sucesoras * 3)
-        pool.extend(c1['SuperGana'].tolist() * 2)
-        pool.extend(c2['SuperGana'].tolist())
-        pool.extend(c3['SuperGana'].tolist())
+        pool.extend(sugerencias_sucesoras * 3)   # Sucesores directos (Día actual)
+        pool.extend(rarezas * 3)                 # Rarezas Anuales (Peso Alto)
+        pool.extend(c1['SuperGana'].tolist() * 2) # Fecha exacta (Día y Mes)
+        pool.extend(c2['SuperGana'].tolist())    # Misma semana
+        pool.extend(c3['SuperGana'].tolist())    # Mismo día de la semana
         
         frecuencia_total = pd.Series(pool).value_counts()
         top3_estelares = frecuencia_total.head(3).index.tolist()
