@@ -11,7 +11,7 @@ pruebah.html
 logo.png
 
 # El CSV se regenera automáticamente en el servidor
-historial_loterias.csv
+# historial_loterias.csv comentado para subirlo
 
 # Python
 __pycache__/
