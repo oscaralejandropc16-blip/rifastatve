@@ -30,8 +30,9 @@ CSV_FILE = 'historial_loterias.csv'
 def raspar_resultados():
     """
     Extrae resultados de los últimos 30 días.
-    MEJORADO: Ordena cronológicamente, elimina duplicados, y normaliza fechas.
+    V2: Reintenta fallos, ordena cronológicamente, elimina duplicados.
     """
+    import time
     from datetime import timedelta
 
     headers = {
@@ -41,35 +42,54 @@ def raspar_resultados():
     }
 
     nuevos_registros = []
+    dias_ok = 0
+    dias_fail = []
 
     for i in range(30):
         fecha_obj = datetime.now() - timedelta(days=i)
         fecha_req = fecha_obj.strftime("%d/%m/%Y")
         url = f"https://supergana.com.ve/pruebah.php?bt={fecha_req}"
 
-        try:
-            response = requests.get(url, headers=headers, timeout=10, verify=False)
-            if response.status_code != 200: continue
-            soup = BeautifulSoup(response.text, 'html.parser')
-            filas = soup.find_all('tr')
-            for fila in filas:
-                th_hora = fila.find('th', scope='row')
-                columnas = fila.find_all('td')
-                if not th_hora or len(columnas) < 2: continue
-                hora_sorteo = th_hora.text.strip()
-                sg_obj = columnas[0].find('h3', class_='ger')
-                tg_obj = columnas[1].find('h3', class_='ger')
-                if sg_obj and tg_obj:
-                    sg_limpio = ''.join(filter(str.isdigit, sg_obj.text.strip()))
-                    tg_limpio = ''.join(filter(str.isdigit, tg_obj.text.strip()))
-                    if len(sg_limpio) >= 4 and len(tg_limpio) >= 1:
-                        nuevos_registros.append({
-                            'Fecha': fecha_obj.strftime("%Y-%m-%d"),
-                            'Sorteo': hora_sorteo,
-                            'SuperGana': sg_limpio[-4:],
-                            'TripleGana': tg_limpio[-1]
-                        })
-        except: continue
+        exito = False
+        for intento in range(3):  # Hasta 3 intentos por día
+            try:
+                response = requests.get(url, headers=headers, timeout=15, verify=False)
+                if response.status_code != 200:
+                    time.sleep(1)
+                    continue
+                soup = BeautifulSoup(response.text, 'html.parser')
+                filas = soup.find_all('tr')
+                registros_dia = 0
+                for fila in filas:
+                    th_hora = fila.find('th', scope='row')
+                    columnas = fila.find_all('td')
+                    if not th_hora or len(columnas) < 2: continue
+                    hora_sorteo = th_hora.text.strip()
+                    sg_obj = columnas[0].find('h3', class_='ger')
+                    tg_obj = columnas[1].find('h3', class_='ger')
+                    if sg_obj and tg_obj:
+                        sg_limpio = ''.join(filter(str.isdigit, sg_obj.text.strip()))
+                        tg_limpio = ''.join(filter(str.isdigit, tg_obj.text.strip()))
+                        if len(sg_limpio) >= 4 and len(tg_limpio) >= 1:
+                            nuevos_registros.append({
+                                'Fecha': fecha_obj.strftime("%Y-%m-%d"),
+                                'Sorteo': hora_sorteo,
+                                'SuperGana': sg_limpio[-4:],
+                                'TripleGana': tg_limpio[-1]
+                            })
+                            registros_dia += 1
+                if registros_dia > 0:
+                    exito = True
+                    dias_ok += 1
+                    break  # No reintentar si ya obtuvo datos
+                else:
+                    time.sleep(1)  # Esperar antes de reintentar
+            except Exception as e:
+                print(f"Error raspando {fecha_req} (intento {intento+1}): {e}")
+                time.sleep(1)
+
+        if not exito:
+            dias_fail.append(fecha_req)
 
     if nuevos_registros:
         df_nuevos = pd.DataFrame(nuevos_registros)
@@ -86,8 +106,9 @@ def raspar_resultados():
         df_final = df_final.sort_values(by=['Fecha_DT', 'Sorteo_Orden'], ascending=True)
         df_final = df_final.drop(columns=['Fecha_DT', 'Sorteo_Orden'])
         df_final.to_csv(CSV_FILE, index=False)
-        return True
-    return False
+        return {'ok': True, 'dias_ok': dias_ok, 'dias_fail': dias_fail,
+                'total': len(df_final)}
+    return {'ok': False, 'dias_ok': 0, 'dias_fail': dias_fail, 'total': 0}
 
 
 # ==========================================
@@ -436,24 +457,32 @@ def comando_actualizar(message):
     bot.reply_to(message, "⏳ _Iniciando módulo Scraper..._", parse_mode="Markdown")
 
     def bg_scrape():
-        if raspar_resultados():
-            # Contar registros
+        resultado = raspar_resultados()
+        if resultado and resultado['ok']:
             try:
                 df = pd.read_csv(CSV_FILE)
                 total = len(df)
                 fechas = pd.to_datetime(df['Fecha'], errors='coerce')
                 fecha_min = fechas.min().strftime("%d/%m/%Y") if not fechas.empty else "?"
                 fecha_max = fechas.max().strftime("%d/%m/%Y") if not fechas.empty else "?"
-                bot.reply_to(message,
-                    f"✅ *¡Historial actualizado y ordenado!*\n"
-                    f"📊 *{total}* sorteos en base de datos\n"
-                    f"📅 Desde: `{fecha_min}` hasta: `{fecha_max}`\n"
-                    f"🔄 Duplicados eliminados, orden cronológico verificado.",
-                    parse_mode="Markdown")
+
+                msg = (f"✅ *¡Historial actualizado y ordenado!*\n"
+                       f"📊 *{total}* sorteos en base de datos\n"
+                       f"📅 Desde: `{fecha_min}` hasta: `{fecha_max}`\n"
+                       f"🌐 Días raspados: *{resultado['dias_ok']}*/30\n")
+
+                if resultado['dias_fail']:
+                    msg += f"⚠️ Sin datos para: `{'`, `'.join(resultado['dias_fail'][:5])}`\n"
+
+                msg += "🔄 Duplicados eliminados, orden cronológico verificado."
+                bot.reply_to(message, msg, parse_mode="Markdown")
             except:
                 bot.reply_to(message, "✅ *¡Historial actualizado!*", parse_mode="Markdown")
         else:
-            bot.reply_to(message, "❌ *Error* al procesar datos web.", parse_mode="Markdown")
+            fail_info = ""
+            if resultado and resultado['dias_fail']:
+                fail_info = f"\nDías fallidos: `{'`, `'.join(resultado['dias_fail'][:5])}`"
+            bot.reply_to(message, f"❌ *Error* al procesar datos web.{fail_info}", parse_mode="Markdown")
 
     threading.Thread(target=bg_scrape).start()
 
