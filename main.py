@@ -197,13 +197,65 @@ def cargar_y_preparar_datos():
 
 
 # ==========================================
-# 3. MOTOR DE PREDICCIÓN V2 (10 CAPAS)
+# 3. MOTOR DE PREDICCIÓN V3 (ENSAMBLAJE POR DÍGITOS)
 # ==========================================
+
+def analizar_digitos_por_posicion(df_contexto):
+    """Analiza la frecuencia de cada dígito (0-9) en cada posición (D1-D4)."""
+    resultado = {}
+    for pos in ['D1', 'D2', 'D3', 'D4']:
+        freq = df_contexto[pos].value_counts()
+        total = len(df_contexto)
+        probs = {}
+        for digito, count in freq.items():
+            probs[digito] = round(count / total, 3) if total > 0 else 0
+        resultado[pos] = probs
+    return resultado
+
+
+def combinar_probabilidades(lista_de_probs, pesos):
+    """Combina múltiples distribuciones de probabilidad con pesos."""
+    combinado = {'D1': Counter(), 'D2': Counter(), 'D3': Counter(), 'D4': Counter()}
+    for probs, peso in zip(lista_de_probs, pesos):
+        for pos in ['D1', 'D2', 'D3', 'D4']:
+            if pos in probs:
+                for digito, prob in probs[pos].items():
+                    combinado[pos][digito] += prob * peso
+    resultado = {}
+    for pos in ['D1', 'D2', 'D3', 'D4']:
+        total = sum(combinado[pos].values())
+        if total > 0:
+            resultado[pos] = {d: round(v/total, 3) for d, v in combinado[pos].most_common()}
+        else:
+            resultado[pos] = {str(i): 0.1 for i in range(10)}
+    return resultado
+
+
+def generar_numeros_candidatos(probs_combinadas, n=10):
+    """Genera los N números más probables ensamblando dígitos."""
+    candidatos = Counter()
+    top_d1 = list(probs_combinadas['D1'].keys())[:4]
+    top_d2 = list(probs_combinadas['D2'].keys())[:4]
+    top_d3 = list(probs_combinadas['D3'].keys())[:4]
+    top_d4 = list(probs_combinadas['D4'].keys())[:4]
+    for d1 in top_d1:
+        for d2 in top_d2:
+            for d3 in top_d3:
+                for d4 in top_d4:
+                    num = f"{d1}{d2}{d3}{d4}"
+                    score = (probs_combinadas['D1'].get(d1, 0) *
+                             probs_combinadas['D2'].get(d2, 0) *
+                             probs_combinadas['D3'].get(d3, 0) *
+                             probs_combinadas['D4'].get(d4, 0))
+                    candidatos[num] = score
+    return [num for num, _ in candidatos.most_common(n)]
+
 
 def calcular_prediccion(fecha_input, hora_input):
     """
-    Motor de predicción V2 con 10 capas de análisis.
-    Retorna dict con: top5, confianza, detalles, capas_activas
+    Motor V3: Predicción por ensamblaje de dígitos.
+    Analiza cada posición del número independientemente
+    usando múltiples contextos, luego ensambla los más probables.
     """
     try:
         fecha_str_con_anio = f"{fecha_input}/{datetime.now().year}"
@@ -221,31 +273,84 @@ def calcular_prediccion(fecha_input, hora_input):
 
     fecha_consulta_str = fecha_parseada.strftime("%Y-%m-%d")
     df_hora = df[df['Sorteo'].str.contains(hora_input, case=False, na=False)].copy()
-
     if df_hora.empty:
         return None
 
-    # Diccionario para acumular puntos por número
-    puntos = Counter()
     capas_activas = []
     detalles = {}
+    probabilidades = []
+    pesos_prob = []
 
-    # =========================================
-    # CAPA 1: SUCESORES DIRECTOS (MUY ALTO PESO)
-    # Busca: si a las 4pm salió X, qué salió a las 10pm históricamente
-    # =========================================
+    # CONTEXTO 1: FECHA EXACTA (máximo peso)
+    c_fecha = df_hora[(df_hora['Dia'] == dia_obj) & (df_hora['Mes'] == mes_obj)]
+    if not c_fecha.empty:
+        capas_activas.append(f"📅 Fecha exacta ({len(c_fecha)} años)")
+        detalles['fecha_exacta'] = [f"{r['Fecha']}→{r['SuperGana']}" for _, r in c_fecha.iterrows()]
+        probabilidades.append(analizar_digitos_por_posicion(c_fecha))
+        pesos_prob.append(5 if len(c_fecha) >= 3 else 3)
+
+    # CONTEXTO 2: VENTANA ±2 DÍAS
+    c_ventana = df_hora[
+        (df_hora['Mes'] == mes_obj) &
+        (df_hora['Dia'] >= max(1, dia_obj - 2)) &
+        (df_hora['Dia'] <= min(31, dia_obj + 2))
+    ]
+    if not c_ventana.empty and len(c_ventana) >= 3:
+        capas_activas.append(f"📆 Ventana ±2 días ({len(c_ventana)})")
+        probabilidades.append(analizar_digitos_por_posicion(c_ventana))
+        pesos_prob.append(4)
+
+    # CONTEXTO 3: DÍA DE SEMANA + MES
+    c_diasem = df_hora[(df_hora['Mes'] == mes_obj) & (df_hora['DiaSemana'] == dia_semana)]
+    if not c_diasem.empty:
+        capas_activas.append(f"🗓 Día semana ({len(c_diasem)})")
+        probabilidades.append(analizar_digitos_por_posicion(c_diasem))
+        pesos_prob.append(3)
+
+    # CONTEXTO 4: SEMANA DEL MES
+    c_semana = df_hora[(df_hora['Mes'] == mes_obj) & (df_hora['SemanaMes'] == semana_mes)]
+    if not c_semana.empty:
+        capas_activas.append(f"📊 Semana mes ({len(c_semana)})")
+        probabilidades.append(analizar_digitos_por_posicion(c_semana))
+        pesos_prob.append(2)
+
+    # CONTEXTO 5: ÚLTIMOS 7 DÍAS
+    fecha_7d = fecha_parseada - timedelta(days=7)
+    c_recientes = df_hora[df_hora['Fecha_DT'] >= fecha_7d]
+    if not c_recientes.empty and len(c_recientes) >= 3:
+        capas_activas.append(f"🌡 Últimos 7 días ({len(c_recientes)})")
+        probabilidades.append(analizar_digitos_por_posicion(c_recientes))
+        pesos_prob.append(3)
+
+    # CONTEXTO 6: DÍA ANTERIOR (patrón secuencial)
+    fecha_anterior_str = (fecha_parseada - timedelta(days=1)).strftime("%Y-%m-%d")
+    res_ayer = df_hora[df_hora['Fecha'] == fecha_anterior_str]
+    if not res_ayer.empty:
+        val_ayer = str(res_ayer.iloc[-1]['SuperGana'])
+        term_ayer = val_ayer[-2:]
+        detalles['dia_anterior'] = f"Ayer: {val_ayer}"
+        numeros_siguientes = []
+        for idx in df_hora.index:
+            row = df_hora.loc[idx]
+            if str(row['SuperGana']).endswith(term_ayer):
+                fecha_sig = row['Fecha_DT'] + timedelta(days=1)
+                res_sig = df_hora[df_hora['Fecha'] == fecha_sig.strftime("%Y-%m-%d")]
+                if not res_sig.empty:
+                    numeros_siguientes.append(res_sig.iloc[0])
+        if numeros_siguientes:
+            df_sig = pd.DataFrame(numeros_siguientes)
+            capas_activas.append(f"🔄 Post-terminal {term_ayer} ({len(df_sig)})")
+            probabilidades.append(analizar_digitos_por_posicion(df_sig))
+            pesos_prob.append(4)
+
+    # CONTEXTO 7: SUCESORES DIRECTOS
     sugerencias_sucesoras = []
-
     if "10 pm" in hora_input.lower():
-        # Buscar resultado de 4pm del mismo día
         res_prev = df[(df['Fecha'] == fecha_consulta_str) & (df['Sorteo'].str.contains("4 pm"))]
         hora_previa = "4 pm"
     elif "4 pm" in hora_input.lower():
         res_prev = df[(df['Fecha'] == fecha_consulta_str) & (df['Sorteo'].str.contains("1 pm"))]
         hora_previa = "1 pm"
-    elif "7 pm" in hora_input.lower():
-        res_prev = df[(df['Fecha'] == fecha_consulta_str) & (df['Sorteo'].str.contains("4 pm"))]
-        hora_previa = "4 pm"
     else:
         res_prev = pd.DataFrame()
         hora_previa = None
@@ -253,215 +358,75 @@ def calcular_prediccion(fecha_input, hora_input):
     if not res_prev.empty and hora_previa:
         val_previo = str(res_prev.iloc[-1]['SuperGana'])
         terminal_prev = val_previo[-2:]
-
-        # Buscar TODOS los sorteos del horario previo que terminen igual
+        detalles['sucesores'] = f"Terminal {hora_previa}: {terminal_prev}"
         df_previo = df[df['Sorteo'].str.contains(hora_previa, case=False, na=False)]
-
         for idx in df_previo.index:
             row = df.loc[idx]
             if str(row['SuperGana']).endswith(terminal_prev):
-                # Buscar la siguiente fila que sea del horario consultado Y del MISMO día
                 fecha_row = row['Fecha']
                 siguiente = df[(df['Fecha'] == fecha_row) &
                                (df['Sorteo'].str.contains(hora_input, case=False, na=False))]
                 if not siguiente.empty:
-                    sugerencias_sucesoras.append(siguiente.iloc[0]['SuperGana'])
-
+                    sugerencias_sucesoras.append(siguiente.iloc[0])
         if sugerencias_sucesoras:
-            capas_activas.append("🔗 Sucesores")
-            detalles['sucesores'] = f"Terminal {hora_previa}: {terminal_prev}"
-            for s in sugerencias_sucesoras:
-                puntos[s] += 5  # Peso alto
+            df_suc = pd.DataFrame(sugerencias_sucesoras)
+            capas_activas.append(f"🔗 Sucesores ({len(df_suc)})")
+            probabilidades.append(analizar_digitos_por_posicion(df_suc))
+            pesos_prob.append(5)
 
-    # =========================================
-    # CAPA 2: FECHA EXACTA HISTÓRICA (ALTO PESO)
-    # Mismo día + mes + hora en otros años
-    # =========================================
-    c_fecha = df_hora[(df_hora['Dia'] == dia_obj) & (df_hora['Mes'] == mes_obj)]
-    if not c_fecha.empty:
-        capas_activas.append("📅 Fecha exacta")
-        detalles['fecha_exacta'] = [f"{r['Fecha']}→{r['SuperGana']}" for _, r in c_fecha.iterrows()]
-        for _, r in c_fecha.iterrows():
-            puntos[r['SuperGana']] += 4
-
-    # =========================================
-    # CAPA 3: DÍGITO INICIAL DOMINANTE (NUEVO)
-    # Si el 18/03 de varios años siempre empieza con 7...
-    # =========================================
-    if not c_fecha.empty:
-        digitos_iniciales = c_fecha['D1'].value_counts()
-        if len(digitos_iniciales) > 0:
-            digito_top = digitos_iniciales.index[0]
-            frecuencia = digitos_iniciales.iloc[0]
-            total = len(c_fecha)
-            if frecuencia >= 2 or (total <= 2 and frecuencia == total):
-                capas_activas.append(f"🔢 Dígito inicial '{digito_top}'")
-                detalles['digito_inicial'] = f"'{digito_top}' domina en {frecuencia}/{total} sorteos"
-                # Dar puntos a todos los números que empiecen con ese dígito en el pool del mes
-                df_digito = df_hora[(df_hora['Mes'] == mes_obj) & (df_hora['D1'] == digito_top)]
-                for _, r in df_digito.iterrows():
-                    puntos[r['SuperGana']] += 3
-
-    # =========================================
-    # CAPA 4: TERMINALES CALIENTES (2 y 3 cifras)
-    # =========================================
+    # CONTEXTO 8: BASE MES COMPLETO
     df_mes_hora = df_hora[df_hora['Mes'] == mes_obj]
-
-    # Terminal 2 cifras
-    term2_freq = df_mes_hora['Terminal2'].value_counts()
-    top_term2 = term2_freq.head(3).index.tolist() if not term2_freq.empty else []
-
-    # Terminal 3 cifras
-    term3_freq = df_mes_hora['Terminal3'].value_counts()
-    top_term3 = term3_freq.head(2).index.tolist() if not term3_freq.empty else []
-
-    if top_term2 or top_term3:
-        capas_activas.append("🔥 Terminales calientes")
-        detalles['terminales'] = {'t2': top_term2, 't3': top_term3}
-
-        for term in top_term2:
-            matches = df_hora[df_hora['Terminal2'] == term]
-            for _, r in matches.iterrows():
-                puntos[r['SuperGana']] += 2
-
-        for term in top_term3:
-            matches = df_hora[df_hora['Terminal3'] == term]
-            for _, r in matches.iterrows():
-                puntos[r['SuperGana']] += 3
-
-    # =========================================
-    # CAPA 5: SEMANA DEL MES (MEDIO PESO)
-    # =========================================
-    c_semana = df_hora[(df_hora['Mes'] == mes_obj) & (df_hora['SemanaMes'] == semana_mes)]
-    if not c_semana.empty:
-        capas_activas.append("📆 Semana del mes")
-        for _, r in c_semana.iterrows():
-            puntos[r['SuperGana']] += 2
-
-    # =========================================
-    # CAPA 6: DÍA DE LA SEMANA (MEDIO PESO)
-    # =========================================
-    c_diasem = df_hora[(df_hora['Mes'] == mes_obj) & (df_hora['DiaSemana'] == dia_semana)]
-    if not c_diasem.empty:
-        capas_activas.append("🗓 Día de semana")
-        for _, r in c_diasem.iterrows():
-            puntos[r['SuperGana']] += 2
-
-    # =========================================
-    # CAPA 7: NÚMEROS CALIENTES ÚLTIMOS 7 DÍAS
-    # =========================================
-    fecha_7d_atras = fecha_parseada - timedelta(days=7)
-    df_recientes = df_hora[df_hora['Fecha_DT'] >= fecha_7d_atras]
-    if not df_recientes.empty:
-        capas_activas.append("🌡 Calientes 7 días")
-        term2_recientes = df_recientes['Terminal2'].value_counts()
-        for term, count in term2_recientes.head(3).items():
-            matches = df_hora[df_hora['Terminal2'] == term]
-            for _, r in matches.head(5).iterrows():
-                puntos[r['SuperGana']] += count
-
-    # =========================================
-    # CAPA 8: NÚMEROS FRÍOS QUE ESTÁN POR SALIR
-    # Terminales que llevan mucho sin salir en este horario
-    # =========================================
-    if len(df_hora) > 30:
-        ultimos_30 = df_hora.tail(30)['Terminal2'].tolist()
-        todos_term2 = df_hora['Terminal2'].value_counts().head(20).index.tolist()
-        frios = [t for t in todos_term2 if t not in ultimos_30]
-        if frios:
-            capas_activas.append("❄️ Fríos por salir")
-            detalles['frios'] = frios[:3]
-            for term in frios[:3]:
-                matches = df_hora[df_hora['Terminal2'] == term]
-                if not matches.empty:
-                    mejor = matches['SuperGana'].value_counts().head(1).index[0]
-                    puntos[mejor] += 2
-
-    # =========================================
-    # CAPA 9: PATRONES CONSECUTIVOS
-    # Si el día anterior salió X, qué tiende a salir al día siguiente
-    # =========================================
-    fecha_anterior_str = (fecha_parseada - timedelta(days=1)).strftime("%Y-%m-%d")
-    res_ayer = df_hora[df_hora['Fecha'] == fecha_anterior_str]
-    if not res_ayer.empty:
-        val_ayer = str(res_ayer.iloc[-1]['SuperGana'])
-        term_ayer = val_ayer[-2:]
-        capas_activas.append("🔄 Patrón día anterior")
-        detalles['dia_anterior'] = f"Ayer: {val_ayer}"
-
-        # Buscar qué salió al día siguiente cada vez que este terminal apareció
-        for idx in df_hora.index:
-            row = df_hora.loc[idx]
-            if str(row['SuperGana']).endswith(term_ayer):
-                fecha_siguiente = row['Fecha_DT'] + timedelta(days=1)
-                fecha_sig_str = fecha_siguiente.strftime("%Y-%m-%d")
-                resultado_sig = df_hora[df_hora['Fecha'] == fecha_sig_str]
-                if not resultado_sig.empty:
-                    for _, r in resultado_sig.iterrows():
-                        puntos[r['SuperGana']] += 3
-
-    # =========================================
-    # CAPA 10: ANÁLISIS DE POSICIÓN DE DÍGITOS
-    # Para cada posición (1-4), cuál es el dígito más frecuente
-    # en este mes+hora. Buscar números que tengan esos dígitos.
-    # =========================================
     if not df_mes_hora.empty:
-        d1_top = df_mes_hora['D1'].value_counts().head(2).index.tolist()
-        d4_top = df_mes_hora['D4'].value_counts().head(2).index.tolist()
-
-        if d1_top and d4_top:
-            capas_activas.append("🎯 Posición de dígitos")
-            detalles['digitos_posicion'] = {
-                'inicio': d1_top,
-                'final': d4_top
-            }
-            # Bonus a números que tengan tanto el inicio como el final frecuentes
-            candidatos = df_hora[
-                (df_hora['D1'].isin(d1_top)) & (df_hora['D4'].isin(d4_top))
-            ]
-            for _, r in candidatos.iterrows():
-                puntos[r['SuperGana']] += 2
+        capas_activas.append(f"📈 Base mes ({len(df_mes_hora)})")
+        probabilidades.append(analizar_digitos_por_posicion(df_mes_hora))
+        pesos_prob.append(1)
 
     # =========================================
-    # RESULTADO FINAL
+    # ENSAMBLAR PREDICCIÓN
     # =========================================
-    if not puntos:
+    if not probabilidades:
         return None
 
-    # Obtener top 5
-    top5 = [num for num, _ in puntos.most_common(5)]
+    probs_finales = combinar_probabilidades(probabilidades, pesos_prob)
+    top_ensamblados = generar_numeros_candidatos(probs_finales, n=8)
 
-    # Calcular confianza real basada en cuántas capas contribuyeron
-    max_capas = 10
-    confianza = min(99, int((len(capas_activas) / max_capas) * 80 + 15))
+    # Terminales calientes
+    term2_freq = df_mes_hora['Terminal2'].value_counts() if not df_mes_hora.empty else pd.Series()
+    top_term2 = term2_freq.head(5).index.tolist() if not term2_freq.empty else []
+    term3_freq = df_mes_hora['Terminal3'].value_counts() if not df_mes_hora.empty else pd.Series()
+    top_term3 = term3_freq.head(3).index.tolist() if not term3_freq.empty else []
 
-    # Calcular la "fuerza" del #1 vs #2 para ajustar confianza
-    if len(puntos) >= 2:
-        top2 = puntos.most_common(2)
-        ratio = top2[0][1] / max(top2[1][1], 1)
-        if ratio >= 2.0:
-            confianza = min(99, confianza + 10)  # #1 es muy dominante
-        elif ratio <= 1.1:
-            confianza = max(20, confianza - 10)   # Muy parejo, menos certeza
+    # Confianza
+    total_peso = sum(pesos_prob)
+    confianza = min(95, int((len(capas_activas) / 8) * 60 + (min(total_peso, 25) / 25) * 35))
 
-    # Top rareza (terminal más frecuente del mes)
-    top_rareza = None
-    if top_term3:
-        rareza_matches = df[df['SuperGana'].str.endswith(top_term3[0])]
-        if not rareza_matches.empty:
-            top_rareza = rareza_matches['SuperGana'].value_counts().head(1).index[0]
+    # Componentes para mostrar
+    componentes = {}
+    for pos in ['D1', 'D2', 'D3', 'D4']:
+        componentes[pos] = list(probs_finales[pos].items())[:3]
+
+    # Rango probable
+    d1_keys = list(probs_finales['D1'].keys())[:2]
+    if d1_keys:
+        rango_min = int(d1_keys[0]) * 1000
+        rango_max = rango_min + 1999 if len(d1_keys) > 1 else rango_min + 999
+        if len(d1_keys) > 1:
+            rango_max = max(rango_max, int(d1_keys[1]) * 1000 + 999)
+        detalles['rango'] = f"{rango_min:04d}-{rango_max:04d}"
 
     return {
-        'top5': top5,
-        'top3': top5[:3],
+        'top5': top_ensamblados[:5],
+        'top7': top_ensamblados[:7],
+        'top3': top_ensamblados[:3],
         'confianza': confianza,
         'capas_activas': capas_activas,
         'detalles': detalles,
+        'componentes': componentes,
         'top_term_2': top_term2,
         'top_term_3': top_term3,
-        'top_rareza': top_rareza,
         'tiene_sucesores': len(sugerencias_sucesoras) > 0,
-        'puntos': dict(puntos.most_common(5))
+        'puntos': {n: round(s * 10000, 1) for n, s in zip(top_ensamblados[:5],
+                   [Counter({n: s for n, s in zip(top_ensamblados, [probs_finales['D1'].get(n[0],0)*probs_finales['D2'].get(n[1],0)*probs_finales['D3'].get(n[2],0)*probs_finales['D4'].get(n[3],0) for n in top_ensamblados])}).get(n, 0) for n in top_ensamblados[:5]])}
     }
 
 
@@ -551,44 +516,46 @@ def comando_patron(message):
             bot.reply_to(message, "⚠ Datos insuficientes. Ejecuta `/actualizar` primero.", parse_mode="Markdown")
             return
 
-        # --- Construir respuesta visual ---
-        res = f"🎯 *SISTEMA DE PROYECCIÓN V2 — TOP 5*\n"
-        res += f"📅 *Análisis:* {fecha_input} | 🕒 *Sorteo:* {hora_input}\n"
+        res = f"🎯 *MOTOR V3 — ENSAMBLAJE POR DÍGITOS*\n"
+        res += f"📅 {fecha_input} | 🕒 {hora_input}\n"
         res += f"━━━━━━━━━━━━━━━━━━━━\n\n"
 
-        # Top 5 números
-        res += f"✨ *NÚMEROS CON MAYOR PROBABILIDAD:*\n"
+        # Top 5 números ensamblados
+        res += f"✨ *NÚMEROS ENSAMBLADOS:*\n"
         iconos = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
         for i, num in enumerate(resultado['top5']):
-            pts = resultado['puntos'].get(num, 0)
-            barra = "█" * min(pts, 15)
-            res += f"{iconos[i]} `{num}` — {pts}pts {barra}\n"
+            res += f"{iconos[i]} `{num}`\n"
+
+        # Componentes por posición
+        if 'componentes' in resultado:
+            res += f"\n🧬 *DÍGITOS POR POSICIÓN:*\n"
+            nombres = {'D1': '1ra', 'D2': '2da', 'D3': '3ra', 'D4': '4ta'}
+            for pos in ['D1', 'D2', 'D3', 'D4']:
+                comps = resultado['componentes'].get(pos, [])
+                if comps:
+                    digits_str = " ".join([f"`{d}`({int(p*100)}%)" for d, p in comps])
+                    res += f"  {nombres[pos]}: {digits_str}\n"
+
+        # Rango probable
+        if 'rango' in resultado['detalles']:
+            res += f"\n📐 *Rango probable:* `{resultado['detalles']['rango']}`\n"
 
         # Terminales calientes
         if resultado['top_term_2']:
-            res += f"\n🔥 *TERMINALES CALIENTES:*\n"
-            res += f"  2 cifras: `{'`, `'.join(resultado['top_term_2'][:3])}`\n"
-        if resultado['top_term_3']:
-            res += f"  3 cifras: `{'`, `'.join(resultado['top_term_3'][:2])}`\n"
-
-        # Rareza
-        if resultado['top_rareza']:
-            res += f"\n🔮 *RAREZA SUGERIDA:* `{resultado['top_rareza']}`\n"
+            res += f"\n� *Terminales:* `{'`, `'.join(resultado['top_term_2'][:5])}`\n"
 
         # Capas activas
-        res += f"\n📊 *ANÁLISIS ACTIVADOS ({len(resultado['capas_activas'])}/10):*\n"
+        res += f"\n📊 *Contextos ({len(resultado['capas_activas'])}/8):*\n"
         for capa in resultado['capas_activas']:
             res += f"  ✅ {capa}\n"
 
-        # Detalles relevantes
-        if 'digito_inicial' in resultado['detalles']:
-            res += f"\n🔢 *Patrón dígito:* {resultado['detalles']['digito_inicial']}\n"
+        # Detalles
         if 'dia_anterior' in resultado['detalles']:
-            res += f"🔄 *Ref. día anterior:* {resultado['detalles']['dia_anterior']}\n"
+            res += f"\n🔄 *Ref:* {resultado['detalles']['dia_anterior']}\n"
         if 'sucesores' in resultado['detalles']:
-            res += f"🔗 *Sucesores:* {resultado['detalles']['sucesores']}\n"
+            res += f"🔗 *{resultado['detalles']['sucesores']}*\n"
 
-        # Confianza real
+        # Confianza
         conf = resultado['confianza']
         if conf >= 70:
             emoji_conf = "🟢"
@@ -596,15 +563,7 @@ def comando_patron(message):
             emoji_conf = "🟡"
         else:
             emoji_conf = "🔴"
-
-        res += f"\n{emoji_conf} *Nivel de Confianza:* {conf}%"
-        if conf >= 70:
-            res += " _(Alta fuerza estadística)_"
-        elif conf >= 50:
-            res += " _(Fuerza moderada)_"
-        else:
-            res += " _(Datos limitados — usar con precaución)_"
-
+        res += f"\n{emoji_conf} *Confianza:* {conf}%"
         res += DISCLAIMER
 
         bot.reply_to(message, res, parse_mode="Markdown")
