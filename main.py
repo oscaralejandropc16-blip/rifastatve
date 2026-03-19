@@ -27,10 +27,42 @@ CSV_FILE = 'historial_loterias.csv'
 # 1. MÓDULO WEB SCRAPER (RECOLECTOR MEJORADO)
 # ==========================================
 
+def normalizar_hora(texto_hora):
+    """Convierte cualquier formato de hora de SuperGana a formato estándar."""
+    texto = texto_hora.strip().lower()
+    # Mapeo de formatos conocidos
+    mapeo = {
+        '9 am': '9 am', '9am': '9 am', '9:00': '9 am',
+        '9 de la mañana': '9 am', '09:00': '9 am',
+        '12 am': '12 am', '12:00': '12 am', '12 pm': '12 am',
+        '1 pm': '1 pm', '1pm': '1 pm', '13:00': '1 pm',
+        '1 de la tarde': '1 pm',
+        '4 pm': '4 pm', '4pm': '4 pm', '16:00': '4 pm',
+        '4 de la tarde': '4 pm',
+        '7 pm': '7 pm', '7pm': '7 pm', '19:00': '7 pm',
+        '7 de la noche': '7 pm',
+        '10 pm': '10 pm', '10pm': '10 pm', '22:00': '10 pm',
+        '10 de la noche': '10 pm',
+    }
+    if texto in mapeo:
+        return mapeo[texto]
+    # Intentar extraer hora numérica
+    nums = re.findall(r'\d+', texto)
+    if nums:
+        h = int(nums[0])
+        if h == 9: return '9 am'
+        if h == 12: return '12 am'
+        if h == 1 or h == 13: return '1 pm'
+        if h == 4 or h == 16: return '4 pm'
+        if h == 7 or h == 19: return '7 pm'
+        if h == 10 or h == 22: return '10 pm'
+    return texto_hora.strip()  # Devolver original si no se reconoce
+
+
 def raspar_resultados():
     """
     Extrae resultados de los últimos 30 días.
-    V2: Reintenta fallos, ordena cronológicamente, elimina duplicados.
+    V3: Normaliza horas, reintenta fallos, filtra datos vacíos.
     """
     import time
     from datetime import timedelta
@@ -51,7 +83,7 @@ def raspar_resultados():
         url = f"https://supergana.com.ve/pruebah.php?bt={fecha_req}"
 
         exito = False
-        for intento in range(3):  # Hasta 3 intentos por día
+        for intento in range(3):
             try:
                 response = requests.get(url, headers=headers, timeout=15, verify=False)
                 if response.status_code != 200:
@@ -64,12 +96,26 @@ def raspar_resultados():
                     th_hora = fila.find('th', scope='row')
                     columnas = fila.find_all('td')
                     if not th_hora or len(columnas) < 2: continue
-                    hora_sorteo = th_hora.text.strip()
+
+                    # Normalizar la hora
+                    hora_raw = th_hora.text.strip()
+                    hora_sorteo = normalizar_hora(hora_raw)
+
+                    # Buscar TODOS los h3.ger en las primeras 2 columnas
                     sg_obj = columnas[0].find('h3', class_='ger')
                     tg_obj = columnas[1].find('h3', class_='ger')
+
                     if sg_obj and tg_obj:
-                        sg_limpio = ''.join(filter(str.isdigit, sg_obj.text.strip()))
-                        tg_limpio = ''.join(filter(str.isdigit, tg_obj.text.strip()))
+                        sg_texto = sg_obj.get_text(strip=True)
+                        tg_texto = tg_obj.get_text(strip=True)
+
+                        # Filtrar valores vacíos, '+', 'xxx', 'X'
+                        if sg_texto in ('', '+', 'xxx', 'X', 'x') or tg_texto in ('', '+', 'xxx', 'X', 'x'):
+                            continue
+
+                        sg_limpio = ''.join(filter(str.isdigit, sg_texto))
+                        tg_limpio = ''.join(filter(str.isdigit, tg_texto))
+
                         if len(sg_limpio) >= 4 and len(tg_limpio) >= 1:
                             nuevos_registros.append({
                                 'Fecha': fecha_obj.strftime("%Y-%m-%d"),
@@ -81,9 +127,9 @@ def raspar_resultados():
                 if registros_dia > 0:
                     exito = True
                     dias_ok += 1
-                    break  # No reintentar si ya obtuvo datos
+                    break
                 else:
-                    time.sleep(1)  # Esperar antes de reintentar
+                    time.sleep(1)
             except Exception as e:
                 print(f"Error raspando {fecha_req} (intento {intento+1}): {e}")
                 time.sleep(1)
