@@ -62,7 +62,7 @@ def normalizar_hora(texto_hora):
 def raspar_resultados():
     """
     Extrae resultados de los últimos 30 días.
-    V3: Normaliza horas, reintenta fallos, filtra datos vacíos.
+    V4: Normaliza fechas y horas, elimina duplicados correctamente.
     """
     import time
     from datetime import timedelta
@@ -100,6 +100,10 @@ def raspar_resultados():
                     # Normalizar la hora
                     hora_raw = th_hora.text.strip()
                     hora_sorteo = normalizar_hora(hora_raw)
+
+                    # Solo guardar sorteos de horas válidas (1pm, 4pm, 7pm, 10pm)
+                    if hora_sorteo not in ('1 pm', '4 pm', '7 pm', '10 pm'):
+                        continue
 
                     # Buscar TODOS los h3.ger en las primeras 2 columnas
                     sg_obj = columnas[0].find('h3', class_='ger')
@@ -141,11 +145,15 @@ def raspar_resultados():
         df_nuevos = pd.DataFrame(nuevos_registros)
         if os.path.exists(CSV_FILE):
             df_old = pd.read_csv(CSV_FILE)
+            # CRÍTICO: Normalizar TODAS las fechas existentes a formato YYYY-MM-DD
+            # Las corridas anteriores guardaban timestamps como "2026-03-16 13:01:40"
+            df_old['Fecha'] = pd.to_datetime(df_old['Fecha'], errors='coerce').dt.strftime('%Y-%m-%d')
+            df_old = df_old.dropna(subset=['Fecha'])
             df_final = pd.concat([df_old, df_nuevos]).drop_duplicates(subset=['Fecha', 'Sorteo'], keep='last')
         else:
             df_final = df_nuevos
 
-        # CRÍTICO: Ordenar cronológicamente y por hora del sorteo
+        # Ordenar cronológicamente y por hora del sorteo
         ORDEN_SORTEO = {'1 pm': 1, '4 pm': 2, '7 pm': 3, '10 pm': 4}
         df_final['Fecha_DT'] = pd.to_datetime(df_final['Fecha'], errors='coerce')
         df_final['Sorteo_Orden'] = df_final['Sorteo'].map(ORDEN_SORTEO).fillna(5)
