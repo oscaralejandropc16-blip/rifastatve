@@ -697,14 +697,82 @@ def comando_stats(message):
 
 
 # ==========================================
+# AUTO-ACTUALIZACIÓN PROGRAMADA
+# ==========================================
+import time as _time
+
+def auto_scraper():
+    """
+    Hilo que actualiza automáticamente después de cada sorteo.
+    Horas de sorteo: 1pm, 4pm, 7pm, 10pm (Venezuela, UTC-4).
+    Raspa 15 minutos después de cada sorteo para dar tiempo a que
+    la página publique los resultados.
+    """
+    # Horas de actualización (hora local Venezuela): 1:15pm, 4:15pm, 7:15pm, 10:15pm
+    HORAS_UPDATE = [13, 16, 19, 22]  # +15 min después del sorteo
+    MINUTO_UPDATE = 15
+
+    print("🔄 Auto-scraper activado. Actualizará después de cada sorteo.")
+
+    # Actualización inicial al arrancar
+    _time.sleep(10)  # Esperar 10s para que el bot esté listo
+    try:
+        print("📥 Actualización inicial al arrancar...")
+        resultado = raspar_resultados()
+        if resultado and resultado['ok']:
+            print(f"✅ Actualización inicial OK: {resultado['total']} sorteos, días OK: {resultado['dias_ok']}/30")
+        else:
+            print(f"⚠️ Actualización inicial con problemas: {resultado}")
+    except Exception as e:
+        print(f"❌ Error en actualización inicial: {e}")
+
+    while True:
+        try:
+            ahora = datetime.now()
+            # Buscar la próxima hora de actualización
+            proxima = None
+            for h in HORAS_UPDATE:
+                candidata = ahora.replace(hour=h, minute=MINUTO_UPDATE, second=0, microsecond=0)
+                if candidata > ahora:
+                    proxima = candidata
+                    break
+
+            # Si no hay más hoy, la primera de mañana
+            if proxima is None:
+                manana = ahora + timedelta(days=1)
+                proxima = manana.replace(hour=HORAS_UPDATE[0], minute=MINUTO_UPDATE, second=0, microsecond=0)
+
+            espera = (proxima - ahora).total_seconds()
+            print(f"⏰ Próxima actualización: {proxima.strftime('%d/%m %I:%M %p')} (en {int(espera//3600)}h {int((espera%3600)//60)}m)")
+
+            _time.sleep(espera)
+
+            # Ejecutar scraper
+            print(f"📥 Auto-actualización: {datetime.now().strftime('%d/%m/%Y %I:%M %p')}")
+            resultado = raspar_resultados()
+            if resultado and resultado['ok']:
+                print(f"✅ Auto-update OK: {resultado['total']} sorteos")
+            else:
+                print(f"⚠️ Auto-update con problemas: {resultado}")
+
+        except Exception as e:
+            print(f"❌ Error en auto-scraper: {e}")
+            _time.sleep(300)  # Esperar 5 min si hay error
+
+
+# ==========================================
 # INICIO DE EJECUCIÓN
 # ==========================================
 if __name__ == "__main__":
-    print("🤖 Iniciando RifaStats VE — Motor V2...")
+    print("🤖 Iniciando RifaStats VE — Motor V4...")
     if not os.path.exists(CSV_FILE):
         pd.DataFrame(columns=['Fecha', 'Sorteo', 'SuperGana', 'TripleGana']).to_csv(CSV_FILE, index=False)
 
-    print("✅ Bot funcionando. Presiona Ctrl+C para detener.")
+    # Lanzar auto-scraper en segundo plano
+    hilo_scraper = threading.Thread(target=auto_scraper, daemon=True)
+    hilo_scraper.start()
+
+    print("✅ Bot funcionando con auto-actualización. Presiona Ctrl+C para detener.")
     try:
         bot.infinity_polling(timeout=15, long_polling_timeout=5)
     except (KeyboardInterrupt, SystemExit):
